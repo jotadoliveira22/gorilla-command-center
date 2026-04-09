@@ -49,13 +49,28 @@ export default function Dashboard({ creds, setCreds }) {
     finally { setLoading(false) }
   }
 
+  const [manualId, setManualId] = useState('')
+  const [showManual, setShowManual] = useState(false)
+
   const discover = async () => {
     if (!token.trim()) return
     setLoading(true); setError('')
     try {
       const found = await discoverIGAccounts(token.trim())
-      if (!found.length) throw new Error('No se encontraron cuentas Instagram Business conectadas a este token. Verifica que: (1) tu cuenta IG esté conectada a una Página de Facebook, (2) el token tenga los permisos: instagram_basic + pages_show_list.')
+      if (!found.length) throw new Error('No se encontraron cuentas automáticamente. Usa la opción manual abajo.')
       setAccounts(found); setStep('discover')
+    } catch (e) { setError(e.message); setShowManual(true) }
+    finally { setLoading(false) }
+  }
+
+  const connectManual = async () => {
+    if (!token.trim() || !manualId.trim()) return
+    setLoading(true); setError('')
+    const nc = { accessToken: token.trim(), igUserId: manualId.trim() }
+    try {
+      const d = await fetchIGData(nc.accessToken, nc.igUserId)
+      storage.set('ig_creds', nc)
+      setCreds(nc); setIgData(d); setStep('connected')
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
@@ -107,9 +122,22 @@ export default function Dashboard({ creds, setCreds }) {
 
           {error && <div style={{ background: '#1A0A0A', border: '1px solid #4A1A1A', borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: '#FF8080', marginBottom: 14, lineHeight: 1.6 }}>❌ {error}</div>}
 
-          <button className="btn-red" onClick={discover} disabled={loading || !token.trim()} style={{ width: '100%', padding: 13, justifyContent: 'center' }}>
-            {loading ? <><Spinner size={14} />Buscando cuentas...</> : '🔍 Detectar mis cuentas de Instagram'}
+          <button className="btn-red" onClick={discover} disabled={loading || !token.trim()} style={{ width: '100%', padding: 13, justifyContent: 'center', marginBottom: 10 }}>
+            {loading ? <><Spinner size={14} />Buscando cuentas...</> : '🔍 Detectar mis cuentas automáticamente'}
           </button>
+
+          <div style={{ textAlign: 'center', fontSize: 11.5, color: '#444', marginBottom: 10 }}>— o ingresa el ID manualmente —</div>
+
+          <div className="card" style={{ marginBottom: 0 }}>
+            <label>Instagram Business Account ID</label>
+            <input placeholder="17841408592252612" value={manualId} onChange={e => setManualId(e.target.value)} style={{ marginBottom: 10 }} />
+            <div style={{ fontSize: 11, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
+              Encuéntralo en Graph API Explorer escribiendo tu ID de Instagram en la barra de query. En tu caso ya lo tenemos: <strong style={{ color: '#D63028' }}>17841408592252612</strong>
+            </div>
+            <button className="btn-red" onClick={connectManual} disabled={loading || !token.trim() || !manualId.trim()} style={{ width: '100%', padding: 12, justifyContent: 'center' }}>
+              {loading ? <><Spinner size={14} />Conectando...</> : '🔗 Conectar con ID manual'}
+            </button>
+          </div>
 
           <div className="card" style={{ marginTop: 20 }}>
             <div style={{ fontSize: 11.5, fontWeight: 600, color: '#555', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 14 }}>Cómo obtener el Access Token</div>
