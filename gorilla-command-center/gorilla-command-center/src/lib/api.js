@@ -1,10 +1,10 @@
 // ── Anthropic API ────────────────────────────────────────────────────────────
 
-export async function callClaude(messages, system, apiKey) {
+export async function callClaude(messages, system, apiKey, maxTokens = 4000) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system, messages }),
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: maxTokens, system, messages }),
   })
   const data = await res.json()
   if (data.error) throw new Error(data.error.message)
