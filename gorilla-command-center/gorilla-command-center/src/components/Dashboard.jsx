@@ -27,13 +27,13 @@ async function fetchAllData(token, igUserId) {
   const insights = { impressions: 0, reach: 0, profile_views: 0, website_clicks: 0, follower_count: 0 }
   try {
     const res = await metaGET(
-      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks,follower_count&period=days_28`,
+      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks,follower_count&period=days_28&metric_type=total_value`,
       token
     )
     for (const item of (res.data || [])) {
-      // days_28 returns a single value in values[0].value
       const key = METRIC_MAP[item.name] || item.name
-      insights[key] = item.values?.[0]?.value ?? 0
+      // metric_type=total_value returns total_value.value OR values[0].value
+      insights[key] = item.total_value?.value ?? item.values?.[0]?.value ?? 0
     }
     debugLog.push(`✓ Account insights (28d): impressions=${insights.impressions}, reach=${insights.reach}, profile_views=${insights.profile_views}`)
   } catch (e) {
@@ -43,12 +43,12 @@ async function fetchAllData(token, igUserId) {
       const since = Math.floor((Date.now() - 27 * 86400000) / 1000)
       const until = Math.floor(Date.now() / 1000)
       const res2 = await metaGET(
-        `/${igUserId}/insights?metric=views,reach,profile_views&period=day&since=${since}&until=${until}`,
+        `/${igUserId}/insights?metric=views,reach,profile_views&period=day&since=${since}&until=${until}&metric_type=total_value`,
         token
       )
       for (const item of (res2.data || [])) {
         const k = METRIC_MAP[item.name] || item.name
-        insights[k] = (item.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+        insights[k] = item.total_value?.value ?? (item.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
       }
       debugLog.push(`✓ Fallback daily insights: impressions=${insights.impressions}, reach=${insights.reach}`)
     } catch (e2) {
@@ -82,12 +82,12 @@ async function fetchAllData(token, igUserId) {
         } else {
           metrics = 'impressions,reach,saved,shares'
         }
-        const ins = await metaGET(`/${post.id}/insights?metric=${metrics}`, token)
+        const ins = await metaGET(`/${post.id}/insights?metric=${metrics}&metric_type=total_value`, token)
         for (const i of (ins.data || [])) {
           // Normalize carousel metric names
           const key = i.name
             .replace('carousel_album_', '')
-          pi[key] = i.values?.[0]?.value ?? 0
+          pi[key] = i.total_value?.value ?? i.values?.[0]?.value ?? 0
         }
       } catch {}
 
@@ -112,9 +112,9 @@ async function fetchAllData(token, igUserId) {
   try {
     // Fetch each demographic separately — API doesn't support multiple breakdowns at once
     const [audGender, audAge, audCity] = await Promise.allSettled([
-      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=gender`, token),
-      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=age`, token),
-      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=city`, token),
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=gender&metric_type=total_value`, token),
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=age&metric_type=total_value`, token),
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=city&metric_type=total_value`, token),
     ])
     const audRes = { data: [
       ...(audGender.status==='fulfilled' ? audGender.value.data||[] : []),
@@ -167,7 +167,7 @@ async function fetchAllData(token, igUserId) {
     debugLog.push(`✗ Audience error: ${e.message}`)
     // Try legacy metrics as fallback
     try {
-      const legacyRes = await metaGET(`/${igUserId}/insights?metric=audience_gender_age,audience_city&period=lifetime`, token)
+      const legacyRes = await metaGET(`/${igUserId}/insights?metric=audience_gender_age,audience_city&period=lifetime&metric_type=total_value`, token)
       for (const item of (legacyRes.data || [])) {
         const val = item.values?.[0]?.value || {}
         if (item.name === 'audience_gender_age') audience.genderAge = val
