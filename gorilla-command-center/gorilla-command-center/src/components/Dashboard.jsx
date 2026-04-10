@@ -105,12 +105,21 @@ async function fetchAllData(token, igUserId) {
         } else {
           metrics = 'impressions,reach,saved,shares'
         }
-        const ins = await metaGET(`/${post.id}/insights?metric=${metrics}&metric_type=total_value`, token)
-        for (const i of (ins.data || [])) {
-          // Normalize carousel metric names
-          const key = i.name
-            .replace('carousel_album_', '')
-          pi[key] = i.total_value?.value ?? i.values?.[0]?.value ?? 0
+        // Try without metric_type=total_value first (works for saved, shares)
+        // If it fails, try with it (needed for impressions on some post types)
+        let insData = []
+        try {
+          const ins = await metaGET(`/${post.id}/insights?metric=${metrics}`, token)
+          insData = ins.data || []
+        } catch {
+          try {
+            const ins2 = await metaGET(`/${post.id}/insights?metric=${metrics}&metric_type=total_value`, token)
+            insData = ins2.data || []
+          } catch {}
+        }
+        for (const i of insData) {
+          const key = i.name.replace('carousel_album_', '')
+          pi[key] = i.values?.[0]?.value ?? i.total_value?.value ?? 0
         }
       } catch {}
 
@@ -216,6 +225,61 @@ async function fetchAllData(token, igUserId) {
     debugLog.push(`✗ Online hours error: ${e.message}`)
   }
 
+  // 6. Reach split: followers vs non-followers (for donut chart)
+  let reachSplit = { followers: 44.7, nonFollowers: 55.3 } // default from Instagram data
+  try {
+    const rsRes = await metaGET(
+      `/${igUserId}/insights?metric=reached_audience_demographics&period=day&since=${sinceTs}&until=${untilTs}&breakdown=follow_type&metric_type=total_value`,
+      token
+    )
+    const rsItem = rsRes.data?.[0]
+    if (rsItem) {
+      const breakdowns = rsItem.total_value?.breakdowns || []
+      for (const bd of breakdowns) {
+        const results = bd.results || []
+        let followers = 0, nonFollowers = 0, total = 0
+        for (const r of results) {
+          const ftype = r.dimension_values?.[0]
+          const val = r.value || 0
+          total += val
+          if (ftype === 'FOLLOWER') followers += val
+          else nonFollowers += val
+        }
+        if (total > 0) {
+          reachSplit.followers = Math.round(followers / total * 1000) / 10
+          reachSplit.nonFollowers = Math.round(nonFollowers / total * 1000) / 10
+          debugLog.push(`✓ Reach split: followers=${reachSplit.followers}%, nonFollowers=${reachSplit.nonFollowers}%`)
+        }
+      }
+    }
+  } catch(e) { debugLog.push(`ℹ Reach split: using default (${e.message})`) }
+
+  // 7. Interactions split: followers vs non-followers
+  let interactionSplit = { followers: 90.3, nonFollowers: 9.7 }
+  try {
+    const isRes = await metaGET(
+      `/${igUserId}/insights?metric=engaged_audience_demographics&period=day&since=${sinceTs}&until=${untilTs}&breakdown=follow_type&metric_type=total_value`,
+      token
+    )
+    const isItem = isRes.data?.[0]
+    if (isItem) {
+      const breakdowns = isItem.total_value?.breakdowns || []
+      for (const bd of breakdowns) {
+        const results = bd.results || []
+        let followers = 0, total = 0
+        for (const r of results) {
+          const val = r.value || 0
+          total += val
+          if (r.dimension_values?.[0] === 'FOLLOWER') followers += val
+        }
+        if (total > 0) {
+          interactionSplit.followers = Math.round(followers / total * 1000) / 10
+          interactionSplit.nonFollowers = Math.round((total - followers) / total * 1000) / 10
+        }
+      }
+    }
+  } catch(e) { debugLog.push(`ℹ Interaction split: using default`) }
+
   // If account-level impressions/reach still 0, fallback to post aggregation
   if (!insights.impressions) {
     const fallback = topMedia.reduce((a, p) => a + (p.pi?.impressions || 0), 0)
@@ -226,7 +290,7 @@ async function fetchAllData(token, igUserId) {
     if (fallback > 0) { insights.reach = fallback; debugLog.push(`ℹ Reach from posts fallback: ${fallback}`) }
   }
 
-  return { profile, insights, engagementTotals, audience, onlineHours, topMedia, debugLog }
+  return { profile, insights, engagementTotals, audience, onlineHours, topMedia, debugLog, reachSplit, interactionSplit }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -370,18 +434,24 @@ export default function Dashboard({ creds, setCreds }) {
 
   // ── ANALYTICS VIEW ──────────────────────────────────────────────────────────
   if (step === 'connected' && data) {
-    const { profile, insights, engagementTotals, audience, onlineHours, topMedia, debugLog } = data
+    const { profile, insights, engagementTotals, audience, onlineHours, topMedia, debugLog, reachSplit, interactionSplit } = data
 
     // Gender breakdown
     const genderAge = audience.genderAge || {}
     const ageGroups = ['13-17','18-24','25-34','35-44','45-54','55-64','65+']
     const ageData = ageGroups.map(ag => ({
       label: ag,
-      value: (genderAge[`M.${ag}`] || 0) + (genderAge[`F.${ag}`] || 0)
+      value: audience.ageRanges?.[ag] || (genderAge[`M.${ag}`] || 0) + (genderAge[`F.${ag}`] || 0)
     }))
-    const totalAudience = ageData.reduce((a,d) => a+d.value, 0) || 0
-    const maleTotal = Object.entries(genderAge).filter(([k]) => k.startsWith('M.')).reduce((a,[,v]) => a+v, 0)
-    const femaleTotal = Object.entries(genderAge).filter(([k]) => k.startsWith('F.')).reduce((a,[,v]) => a+v, 0)
+    // Prefer ageRanges directly from new API, fall back to genderAge-derived ageData
+    const ageDataDirect = Object.keys(audience.ageRanges || {}).length > 0
+    const totalAudience = ageDataDirect
+      ? Object.values(audience.ageRanges).reduce((a,v) => a+v, 0) || 0
+      : ageData.reduce((a,d) => a+d.value, 0) || 0
+    // Use audience.gender directly (new API: {M: 292, F: 166, U: 705})
+    // Also check genderAge keys as legacy fallback
+    const maleTotal = (audience.gender?.M || 0) + Object.entries(genderAge).filter(([k]) => k.startsWith('M.')).reduce((a,[,v]) => a+v, 0)
+    const femaleTotal = (audience.gender?.F || 0) + Object.entries(genderAge).filter(([k]) => k.startsWith('F.')).reduce((a,[,v]) => a+v, 0)
     const gTotal = maleTotal + femaleTotal || 1
 
     // Cities
@@ -496,8 +566,8 @@ export default function Dashboard({ creds, setCreds }) {
                 <DonutChart
                   value={fmt(insights.impressions)}
                   label="Visualizaciones"
-                  pct1={55.3} label1={`No seguidores · 55,3%`}
-                  pct2={44.7} label2={`Seguidores · 44,7%`}
+                  pct1={reachSplit?.nonFollowers ?? 55.3} label1={`No seguidores · ${reachSplit?.nonFollowers ?? 55.3}%`}
+                  pct2={reachSplit?.followers ?? 44.7} label2={`Seguidores · ${reachSplit?.followers ?? 44.7}%`}
                   color1="#CC0000" color2="#7C3AED"
                 />
               </div>
@@ -552,8 +622,8 @@ export default function Dashboard({ creds, setCreds }) {
                 <DonutChart
                   value={fmt(totalInteractions)}
                   label="Interacciones"
-                  pct1={90.3} label1="Seguidores · 90,3%"
-                  pct2={9.7}  label2="No seguidores · 9,7%"
+                  pct1={interactionSplit?.followers ?? 90.3} label1={`Seguidores · ${interactionSplit?.followers ?? 90.3}%`}
+                  pct2={interactionSplit?.nonFollowers ?? 9.7} label2={`No seguidores · ${interactionSplit?.nonFollowers ?? 9.7}%`}
                   color1="#CC0000" color2="#7C3AED"
                 />
               </div>
@@ -625,7 +695,7 @@ export default function Dashboard({ creds, setCreds }) {
                 <>
                   <SH title="Rango de edad"/>
                   <div style={{ background:'#1A1A1A', border:'1px solid #222', borderRadius:12, padding:'16px 20px', marginBottom:14 }}>
-                    {ageData.map((d,i) => {
+                    {ageData.filter(d => d.value > 0).sort((a,b) => b.value - a.value).map((d,i) => {
                       const pct = Math.round(d.value/totalAudience*100)
                       return pct > 0 ? <HBar key={i} label={d.label} pct={pct} value={`${pct}%`} color="#CC0000"/> : null
                     })}
