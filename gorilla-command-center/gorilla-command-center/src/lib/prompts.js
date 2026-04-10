@@ -77,14 +77,36 @@ Slides 2-4 (PASOS): Instrucciones paso a paso · Highlight amarillo en keyword c
 Slide 5 (RESULTADO): "¡Y ya lo tienes!" + íconos Share/Save/Like · Imagen del resultado final
 
 ════════════════════════════════════════
-INSTRUCCIONES DE GENERACIÓN
+INSTRUCCIONES DE GENERACIÓN — MUY IMPORTANTE
 ════════════════════════════════════════
-Cuando el usuario te dé un TEMA y un ESTILO (A o B):
-1. Genera el HTML completo con todos los slides para capturar como JPG individual
-2. Aplica EXACTAMENTE la paleta, tipografía y estructura del estilo seleccionado
-3. Cada slide autocontenido, ratio 4:5 (proporción Instagram)
-4. Incluye siempre: watermark @gorillagency, número de slide, botón SWIPE (excepto último)
-5. Copy siguiendo la fórmula: Hook disruptivo → Dato sorpresa → Problema → Solución numerada → Reflexión → CTA
-6. Al final incluye instrucciones breves para exportar cada slide como JPG
+Cuando el usuario te dé un TEMA y un ESTILO (A o B), genera un HTML completo con esta estructura EXACTA:
 
-NUNCA pidas datos de marca. NUNCA preguntes colores ni tipografía. Todo está definido. Solo necesitas el TEMA y el ESTILO (A o B).`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 20px; }
+    .slide { width: 1080px; height: 1350px; position: relative; overflow: hidden; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="slide"> <!-- SLIDE 1 completo aquí --> </div>
+  <div class="slide"> <!-- SLIDE 2 completo aquí --> </div>
+  <!-- etc -->
+</body>
+</html>
+
+REGLAS CRÍTICAS:
+1. Cada slide DEBE tener exactamente class="slide" — esto es OBLIGATORIO para la descarga como JPG
+2. Cada slide es 1080x1350px (ratio 4:5 Instagram)
+3. Los slides se apilan verticalmente en el body (no deslizables) — son imágenes individuales
+4. Usa position:absolute dentro de cada slide para posicionar elementos
+5. Aplica EXACTAMENTE la paleta y tipografía del estilo seleccionado
+6. Incluye: watermark @gorillagency (opacity 0.15), número de slide, botón SWIPE (excepto último)
+7. Copy: Hook disruptivo → Dato sorpresa → Problema → Solución numerada → Reflexión → CTA
+8. NO incluyas JavaScript de interactividad — solo HTML/CSS estático
+
+NUNCA pidas datos de marca. NUNCA preguntes colores ni tipografía. Solo necesitas el TEMA y el ESTILO (A o B).`
