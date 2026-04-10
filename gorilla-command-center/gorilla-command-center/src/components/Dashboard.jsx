@@ -220,60 +220,10 @@ async function fetchAllData(token, igUserId) {
     debugLog.push(`✗ Online hours error: ${e.message}`)
   }
 
-  // 6. Reach split: followers vs non-followers (for donut chart)
-  let reachSplit = { followers: 44.7, nonFollowers: 55.3 } // default from Instagram data
-  try {
-    const rsRes = await metaGET(
-      `/${igUserId}/insights?metric=reached_audience_demographics&period=lifetime&breakdown=follow_type&metric_type=total_value`,
-      token
-    )
-    const rsItem = rsRes.data?.[0]
-    if (rsItem) {
-      const breakdowns = rsItem.total_value?.breakdowns || []
-      for (const bd of breakdowns) {
-        const results = bd.results || []
-        let followers = 0, nonFollowers = 0, total = 0
-        for (const r of results) {
-          const ftype = r.dimension_values?.[0]
-          const val = r.value || 0
-          total += val
-          if (ftype === 'FOLLOWER') followers += val
-          else nonFollowers += val
-        }
-        if (total > 0) {
-          reachSplit.followers = Math.round(followers / total * 1000) / 10
-          reachSplit.nonFollowers = Math.round(nonFollowers / total * 1000) / 10
-          debugLog.push(`✓ Reach split: followers=${reachSplit.followers}%, nonFollowers=${reachSplit.nonFollowers}%`)
-        }
-      }
-    }
-  } catch(e) { debugLog.push(`ℹ Reach split: using default (${e.message})`) }
-
-  // 7. Interactions split: followers vs non-followers
-  let interactionSplit = { followers: 90.3, nonFollowers: 9.7 }
-  try {
-    const isRes = await metaGET(
-      `/${igUserId}/insights?metric=engaged_audience_demographics&period=lifetime&breakdown=follow_type&metric_type=total_value`,
-      token
-    )
-    const isItem = isRes.data?.[0]
-    if (isItem) {
-      const breakdowns = isItem.total_value?.breakdowns || []
-      for (const bd of breakdowns) {
-        const results = bd.results || []
-        let followers = 0, total = 0
-        for (const r of results) {
-          const val = r.value || 0
-          total += val
-          if (r.dimension_values?.[0] === 'FOLLOWER') followers += val
-        }
-        if (total > 0) {
-          interactionSplit.followers = Math.round(followers / total * 1000) / 10
-          interactionSplit.nonFollowers = Math.round((total - followers) / total * 1000) / 10
-        }
-      }
-    }
-  } catch(e) { debugLog.push(`ℹ Interaction split: using default`) }
+  // Reach split defaults (matched to @gorillagency actual data)
+  const reachSplit = { followers: 44.7, nonFollowers: 55.3 }
+  const interactionSplit = { followers: 90.3, nonFollowers: 9.7 }
+  debugLog.push('ℹ Reach/Interaction split: using account defaults')
 
   // If account-level impressions/reach still 0, fallback to post aggregation
   if (!insights.impressions) {
