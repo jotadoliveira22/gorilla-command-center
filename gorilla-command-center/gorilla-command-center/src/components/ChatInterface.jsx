@@ -1,8 +1,53 @@
 import { useState, useRef, useEffect } from 'react'
 import { callClaude } from '../lib/api.js'
+import CarouselDownloader from './CarouselDownloader.jsx'
 
 function Spinner({ size = 14 }) {
   return <div style={{ width: size, height: size, border: '2px solid #333', borderTopColor: '#D63028', borderRadius: '50%', animation: 'spin .7s linear infinite', flexShrink: 0 }} />
+}
+
+// Detect if message contains HTML carousel
+function extractHtml(content) {
+  const match = content.match(/<!DOCTYPE html[\s\S]*<\/html>/i) ||
+                content.match(/<html[\s\S]*<\/html>/i) ||
+                content.match(/```html\n([\s\S]*?)\n```/)
+  if (match) return match[1] || match[0]
+  if (content.includes('<div') && content.includes('</div>') && content.includes('background') && content.length > 2000) {
+    const start = content.indexOf('<')
+    const end = content.lastIndexOf('>') + 1
+    if (start >= 0 && end > start) return content.slice(start, end)
+  }
+  return null
+}
+
+function MessageBubble({ msg, isCarrusel }) {
+  const htmlContent = isCarrusel && msg.role === 'assistant' ? extractHtml(msg.content) : null
+
+  if (htmlContent) {
+    return (
+      <div className="fade-up" style={{ width: '100%' }}>
+        <CarouselDownloader html={htmlContent} />
+        {/* Show any text before/after the HTML */}
+        {msg.content.replace(htmlContent, '').replace(/```html|```/g, '').trim() && (
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
+            <div style={{ width: 26, height: 26, borderRadius: 7, background: '#1A1A1A', border: '1px solid #222', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#D63028', marginRight: 9, flexShrink: 0, alignSelf: 'flex-start', marginTop: 2 }}>G</div>
+            <div style={{ maxWidth: '78%', background: '#1A1A1A', color: '#F0F0F0', borderRadius: '15px 15px 15px 4px', padding: '11px 15px', fontSize: 13, lineHeight: 1.65, border: '1px solid #222', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {msg.content.replace(htmlContent, '').replace(/```html|```/g, '').trim()}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+      {msg.role === 'assistant' && <div style={{ width: 26, height: 26, borderRadius: 7, background: '#1A1A1A', border: '1px solid #222', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#D63028', marginRight: 9, flexShrink: 0, alignSelf: 'flex-end', marginBottom: 2 }}>G</div>}
+      <div style={{ maxWidth: '78%', background: msg.role === 'user' ? '#D63028' : '#1A1A1A', color: '#F0F0F0', borderRadius: msg.role === 'user' ? '15px 15px 4px 15px' : '15px 15px 15px 4px', padding: '11px 15px', fontSize: 13.5, lineHeight: 1.65, border: msg.role === 'user' ? 'none' : '1px solid #222', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {msg.content}
+      </div>
+    </div>
+  )
 }
 
 export default function ChatInterface({ tab, apiKey, messages, setMessages }) {
@@ -28,7 +73,7 @@ export default function ChatInterface({ tab, apiKey, messages, setMessages }) {
     if (!apiKey) { alert('Configura tu Anthropic API Key en Configuración (⚙).'); return }
     let finalContent = content
     if (isCarrusel && style && messages.length === 0) {
-      finalContent = `ESTILO: ${style}\nTEMA: ${content}`
+      finalContent = `ESTILO: ${style}\nTEMA: ${content}\n\nGenera el HTML completo del carrusel con todos los slides. Incluye DOCTYPE, html, head y body completos. Los slides deben estar claramente separados con class="slide" en cada uno.`
     }
     const updated = [...messages, { role: 'user', content: finalContent }]
     setMessages(updated)
@@ -95,10 +140,7 @@ export default function ChatInterface({ tab, apiKey, messages, setMessages }) {
               </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} className="fade-up" style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                {m.role === 'assistant' && <div style={{ width: 26, height: 26, borderRadius: 7, background: '#1A1A1A', border: '1px solid #222', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#D63028', marginRight: 9, flexShrink: 0, alignSelf: 'flex-end', marginBottom: 2 }}>G</div>}
-                <div style={{ maxWidth: '78%', background: m.role === 'user' ? '#D63028' : '#1A1A1A', color: '#F0F0F0', borderRadius: m.role === 'user' ? '15px 15px 4px 15px' : '15px 15px 15px 4px', padding: '11px 15px', fontSize: 13.5, lineHeight: 1.65, border: m.role === 'user' ? 'none' : '1px solid #222', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</div>
-              </div>
+              <MessageBubble key={i} msg={m} isCarrusel={isCarrusel} />
             ))}
             {loading && (
               <div className="fade-up" style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>
