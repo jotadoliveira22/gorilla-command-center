@@ -3,6 +3,7 @@ import Dashboard from './components/Dashboard.jsx'
 import ChatInterface from './components/ChatInterface.jsx'
 import Calendar from './components/Calendar.jsx'
 import DMs from './components/DMs.jsx'
+import BusinessIntel from './components/BusinessIntel.jsx'
 import Settings from './components/Settings.jsx'
 import { CONTENIDO_PROMPT, CARRUSEL_PROMPT } from './lib/prompts.js'
 import { storage } from './lib/api.js'
@@ -41,6 +42,7 @@ const TABS = [
   },
   { id: 'calendar', label: 'Calendario', sub: 'Scheduling + Auto-post' },
   { id: 'dms', label: 'DMs & Comentarios', sub: 'Automatización IA' },
+  { id: 'bi', label: 'Business Intel', sub: 'Análisis Competitivo' },
 ]
 
 export default function App() {
@@ -131,6 +133,7 @@ export default function App() {
           )}
           {tab === 'calendar' && <Calendar posts={posts} setPosts={setPosts} creds={creds} />}
           {tab === 'dms' && <DMs apiKey={apiKey} />}
+          {tab === 'bi' && <BusinessIntel apiKey={apiKey} />}
         </div>
       </div>
     </>
