@@ -10,13 +10,15 @@ async function metaGET(path, token) {
 }
 
 async function fetchAllData(token, igUserId) {
-  const since = Math.floor((Date.now() - 28 * 86400000) / 1000)
-  const until = Math.floor(Date.now() / 1000)
+  const now = new Date()
+  const since28 = new Date(now - 28 * 86400000)
+  const sinceTs = Math.floor(since28.getTime() / 1000)
+  const untilTs = Math.floor(now.getTime() / 1000)
 
   const [profile, insightsRes, mediaRes, audienceRes, onlineRes] = await Promise.allSettled([
     metaGET(`/${igUserId}?fields=username,name,biography,website,followers_count,follows_count,media_count,profile_picture_url`, token),
-    metaGET(`/${igUserId}/insights?metric=reach,impressions,profile_views,website_clicks,follower_count,email_contacts,phone_call_clicks&period=day&since=${since}&until=${until}`, token),
-    metaGET(`/${igUserId}/media?fields=id,caption,like_count,comments_count,timestamp,media_type,media_url,thumbnail_url,permalink&limit=9`, token),
+    metaGET(`/${igUserId}/insights?metric=reach,impressions,profile_views,website_clicks,follower_count,email_contacts,phone_call_clicks&period=day&since=${sinceTs}&until=${untilTs}`, token),
+    metaGET(`/${igUserId}/media?fields=id,caption,like_count,comments_count,timestamp,media_type,media_url,thumbnail_url,permalink&limit=20`, token),
     metaGET(`/${igUserId}/insights?metric=audience_gender_age,audience_city,audience_country&period=lifetime`, token),
     metaGET(`/${igUserId}/insights?metric=online_followers&period=lifetime`, token),
   ])
@@ -25,7 +27,11 @@ async function fetchAllData(token, igUserId) {
   const insights = {}
   if (insightsRes.status === 'fulfilled') {
     for (const item of (insightsRes.value.data || [])) {
-      insights[item.name] = item.values?.reduce((a, v) => a + (v.value || 0), 0) || 0
+      const total = (item.values || []).reduce((acc, v) => {
+        const val = typeof v.value === 'object' ? Object.values(v.value).reduce((a,b)=>a+b,0) : (v.value || 0)
+        return acc + val
+      }, 0)
+      insights[item.name] = total
     }
   }
 
@@ -45,15 +51,23 @@ async function fetchAllData(token, igUserId) {
   }
 
   const mediaList = mediaRes.status === 'fulfilled' ? (mediaRes.value.data || []) : []
-  const topMedia = await Promise.all(mediaList.map(async post => {
+  const topMedia = await Promise.all(mediaList.slice(0,9).map(async post => {
     let pi = {}
     try {
-      const fields = post.media_type === 'VIDEO' ? 'impressions,reach,plays,saved,shares' : 'impressions,reach,saved,shares'
+      let fields = 'reach,saved,shares'
+      if (post.media_type === 'VIDEO') fields = 'reach,plays,saved,shares,impressions'
+      else if (post.media_type !== 'CAROUSEL_ALBUM') fields = 'reach,impressions,saved,shares'
       const ins = await metaGET(`/${post.id}/insights?metric=${fields}`, token)
-      for (const i of (ins.data || [])) pi[i.name] = i.values?.[0]?.value || 0
+      for (const i of (ins.data || [])) pi[i.name] = i.values?.[0]?.value ?? i.total_value?.value ?? 0
     } catch {}
     return { ...post, pi }
   }))
+
+  // Fallback: aggregate from posts if account insights returned 0
+  const postImpressions = topMedia.reduce((a,p)=>a+(p.pi?.impressions||0),0)
+  const postReach = topMedia.reduce((a,p)=>a+(p.pi?.reach||0),0)
+  if (!insights.impressions && postImpressions>0) insights.impressions = postImpressions
+  if (!insights.reach && postReach>0) insights.reach = postReach
 
   return { profile: prof, insights, audience, onlineHours, topMedia }
 }
