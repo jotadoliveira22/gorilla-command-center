@@ -27,7 +27,7 @@ async function fetchAllData(token, igUserId) {
   const insights = { impressions: 0, reach: 0, profile_views: 0, website_clicks: 0, follower_count: 0 }
   try {
     const res = await metaGET(
-      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks&period=days_28&metric_type=total_value`,
+      `/${igUserId}/insights?metric=reach,profile_views,website_clicks&period=days_28&metric_type=total_value`,
       token
     )
     for (const item of (res.data || [])) {
@@ -35,7 +35,18 @@ async function fetchAllData(token, igUserId) {
       // metric_type=total_value returns total_value.value OR values[0].value
       insights[key] = item.total_value?.value ?? item.values?.[0]?.value ?? 0
     }
-    debugLog.push(`✓ Account insights (28d): impressions=${insights.impressions}, reach=${insights.reach}, profile_views=${insights.profile_views}`)
+    debugLog.push(`✓ Account insights (28d): reach=${insights.reach}, profile_views=${insights.profile_views}`)
+    // views needs period=day (incompatible with days_28)
+    try {
+      const sinceV = Math.floor((Date.now() - 28*86400000) / 1000)
+      const untilV = Math.floor(Date.now() / 1000)
+      const viewsRes = await metaGET(`/${igUserId}/insights?metric=views&period=day&since=${sinceV}&until=${untilV}&metric_type=total_value`, token)
+      const viewsData = viewsRes.data?.[0]
+      insights.impressions = viewsData?.total_value?.value ?? (viewsData?.values||[]).reduce((a,v)=>a+(Number(v.value)||0),0)
+      debugLog.push(`✓ Views (impressions) 28d: ${insights.impressions}`)
+    } catch(e) {
+      debugLog.push(`ℹ Views error: ${e.message} — using post fallback`)
+    }
     // follower_count needs its own call without metric_type=total_value
     try {
       const fcRes = await metaGET(`/${igUserId}/insights?metric=follower_count&period=day&since=${Math.floor((Date.now()-28*86400000)/1000)}&until=${Math.floor(Date.now()/1000)}`, token)
@@ -52,7 +63,7 @@ async function fetchAllData(token, igUserId) {
       const since = Math.floor((Date.now() - 27 * 86400000) / 1000)
       const until = Math.floor(Date.now() / 1000)
       const res2 = await metaGET(
-        `/${igUserId}/insights?metric=views,reach,profile_views&period=day&since=${since}&until=${until}&metric_type=total_value`,
+        `/${igUserId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&metric_type=total_value`,
         token
       )
       for (const item of (res2.data || [])) {
