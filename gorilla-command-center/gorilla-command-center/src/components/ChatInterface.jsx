@@ -71,20 +71,28 @@ export default function ChatInterface({ tab, apiKey, messages, setMessages }) {
     const content = (text || input).trim()
     if (!content || loading) return
     if (!apiKey) { alert('Configura tu Anthropic API Key en Configuración (⚙).'); return }
-    let finalContent = content
-    if (isCarrusel && style && messages.length === 0) {
-      finalContent = `ESTILO: ${style}\nTEMA: ${content}\n\nGenera el HTML completo del carrusel con todos los slides. Incluye DOCTYPE, html, head y body completos. Los slides deben estar claramente separados con class="slide" en cada uno.`
-    }
-    const updated = [...messages, { role: 'user', content: finalContent }]
-    setMessages(updated)
+
+    const displayContent = (isCarrusel && style && messages.length === 0)
+      ? `Estilo ${style} · ${content}`
+      : content
+
+    const apiContent = (isCarrusel && style && messages.length === 0)
+      ? `ESTILO: ${style}
+TEMA: ${content}`
+      : content
+
+    const displayMsgs = [...messages, { role: 'user', content: displayContent }]
+    const apiMsgs = [...messages, { role: 'user', content: apiContent }]
+
+    setMessages(displayMsgs)
     setInput('')
     if (taRef.current) taRef.current.style.height = 'auto'
     setLoading(true)
     try {
-      const reply = await callClaude(updated, tab.prompt, apiKey)
-      setMessages([...updated, { role: 'assistant', content: reply }])
+      const reply = await callClaude(apiMsgs, tab.prompt, apiKey)
+      setMessages([...displayMsgs, { role: 'assistant', content: reply }])
     } catch (e) {
-      setMessages([...updated, { role: 'assistant', content: `Error: ${e.message}` }])
+      setMessages([...displayMsgs, { role: 'assistant', content: `Error: ${e.message}` }])
     } finally { setLoading(false) }
   }
 
