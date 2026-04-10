@@ -23,15 +23,17 @@ async function fetchAllData(token, igUserId) {
 
   // 2. Account-level insights — period=days_28 gives the EXACT 28-day aggregate
   //    that Instagram's app shows (not a sum of daily values)
+  const METRIC_MAP = { views: 'impressions', total_interactions: 'interactions' }
   const insights = { impressions: 0, reach: 0, profile_views: 0, website_clicks: 0, follower_count: 0 }
   try {
     const res = await metaGET(
-      `/${igUserId}/insights?metric=impressions,reach,profile_views,website_clicks,follower_count&period=days_28`,
+      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks,follower_count&period=days_28`,
       token
     )
     for (const item of (res.data || [])) {
       // days_28 returns a single value in values[0].value
-      insights[item.name] = item.values?.[0]?.value ?? 0
+      const key = METRIC_MAP[item.name] || item.name
+      insights[key] = item.values?.[0]?.value ?? 0
     }
     debugLog.push(`✓ Account insights (28d): impressions=${insights.impressions}, reach=${insights.reach}, profile_views=${insights.profile_views}`)
   } catch (e) {
@@ -41,11 +43,12 @@ async function fetchAllData(token, igUserId) {
       const since = Math.floor((Date.now() - 27 * 86400000) / 1000)
       const until = Math.floor(Date.now() / 1000)
       const res2 = await metaGET(
-        `/${igUserId}/insights?metric=impressions,reach,profile_views&period=day&since=${since}&until=${until}`,
+        `/${igUserId}/insights?metric=views,reach,profile_views&period=day&since=${since}&until=${until}`,
         token
       )
       for (const item of (res2.data || [])) {
-        insights[item.name] = (item.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+        const k = METRIC_MAP[item.name] || item.name
+        insights[k] = (item.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
       }
       debugLog.push(`✓ Fallback daily insights: impressions=${insights.impressions}, reach=${insights.reach}`)
     } catch (e2) {
@@ -105,21 +108,75 @@ async function fetchAllData(token, igUserId) {
   }
 
   // 4. Audience demographics (lifetime — same as Instagram app)
-  const audience = { genderAge: {}, cities: {}, countries: {} }
+  const audience = { genderAge: {}, cities: {}, countries: {}, ageRanges: {}, gender: {} }
   try {
-    const audRes = await metaGET(
-      `/${igUserId}/insights?metric=audience_gender_age,audience_city,audience_country&period=lifetime`,
-      token
-    )
+    // Fetch each demographic separately — API doesn't support multiple breakdowns at once
+    const [audGender, audAge, audCity] = await Promise.allSettled([
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=gender`, token),
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=age`, token),
+      metaGET(`/${igUserId}/insights?metric=follower_demographics&period=lifetime&breakdown=city`, token),
+    ])
+    const audRes = { data: [
+      ...(audGender.status==='fulfilled' ? audGender.value.data||[] : []),
+      ...(audAge.status==='fulfilled' ? audAge.value.data||[] : []),
+      ...(audCity.status==='fulfilled' ? audCity.value.data||[] : []),
+    ]}
     for (const item of (audRes.data || [])) {
+      if (item.name === 'follower_demographics') {
+        // New API format: total_value.breakdowns array
+        const breakdowns = item.total_value?.breakdowns || []
+        for (const bd of breakdowns) {
+          const dims = bd.dimension_keys || []
+          const results = bd.results || []
+          if (dims.length === 1) {
+            const dim = dims[0]
+            for (const r of results) {
+              const val = r.value || 0
+              const dv = r.dimension_values?.[0]
+              if (dim === 'gender') {
+                // M -> Hombres, F -> Mujeres
+                audience.gender[dv] = val
+              } else if (dim === 'age') {
+                audience.ageRanges[dv] = val
+                // Also populate genderAge-compatible key for display
+                audience.genderAge[`M.${dv}`] = (audience.genderAge[`M.${dv}`] || 0)
+                audience.genderAge[`F.${dv}`] = (audience.genderAge[`F.${dv}`] || 0)
+              } else if (dim === 'city') {
+                audience.cities[dv] = val
+              }
+            }
+          }
+        }
+        // If we got gender data, distribute it across age groups proportionally for genderAge
+        if (Object.keys(audience.gender).length > 0 && Object.keys(audience.ageRanges).length > 0) {
+          const mPct = (audience.gender['M'] || 0) / (Object.values(audience.gender).reduce((a,b)=>a+b,0)||1)
+          for (const [age, total] of Object.entries(audience.ageRanges)) {
+            audience.genderAge[`M.${age}`] = Math.round(total * mPct)
+            audience.genderAge[`F.${age}`] = total - Math.round(total * mPct)
+          }
+        }
+      }
+      // Legacy format fallback
       const val = item.values?.[0]?.value || {}
       if (item.name === 'audience_gender_age') audience.genderAge = val
       if (item.name === 'audience_city') audience.cities = val
       if (item.name === 'audience_country') audience.countries = val
     }
-    debugLog.push(`✓ Audience: ${Object.keys(audience.genderAge).length} gender/age groups, ${Object.keys(audience.cities).length} cities`)
+    debugLog.push(`✓ Audience: gender=${JSON.stringify(audience.gender)}, cities=${Object.keys(audience.cities).length}, ageRanges=${Object.keys(audience.ageRanges).length}`)
   } catch (e) {
     debugLog.push(`✗ Audience error: ${e.message}`)
+    // Try legacy metrics as fallback
+    try {
+      const legacyRes = await metaGET(`/${igUserId}/insights?metric=audience_gender_age,audience_city&period=lifetime`, token)
+      for (const item of (legacyRes.data || [])) {
+        const val = item.values?.[0]?.value || {}
+        if (item.name === 'audience_gender_age') audience.genderAge = val
+        if (item.name === 'audience_city') audience.cities = val
+      }
+      debugLog.push(`✓ Legacy audience fallback: ${Object.keys(audience.genderAge).length} groups`)
+    } catch (e2) {
+      debugLog.push(`✗ Legacy audience error: ${e2.message}`)
+    }
   }
 
   // 5. Online followers by hour
