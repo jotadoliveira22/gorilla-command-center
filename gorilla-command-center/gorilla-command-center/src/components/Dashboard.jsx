@@ -29,25 +29,33 @@ async function fetchAllData(token, igUserId) {
   const sinceTs = Math.floor((Date.now() - 28 * 86400000) / 1000)
   const untilTs = Math.floor(Date.now() / 1000)
 
-  // Call A: views (impressions) — period=day, no metric_type
+  // Call A: views (impressions) — requires metric_type=total_value, reads total_value.value
   try {
     const r = await metaGET(
-      `/${igUserId}/insights?metric=views&period=day&since=${sinceTs}&until=${untilTs}`,
+      `/${igUserId}/insights?metric=views&period=day&since=${sinceTs}&until=${untilTs}&metric_type=total_value`,
       token
     )
-    insights.impressions = (r.data?.[0]?.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+    // With metric_type=total_value the sum is in total_value.value (not values[] array)
+    insights.impressions = r.data?.[0]?.total_value?.value ?? 0
     debugLog.push(`✓ Views: ${insights.impressions}`)
   } catch(e) { debugLog.push(`✗ Views: ${e.message}`) }
 
-  // Call B: reach — period=day, no metric_type
+  // Call B: reach — try with metric_type=total_value first, fallback to values[] sum
   try {
     const r = await metaGET(
-      `/${igUserId}/insights?metric=reach&period=day&since=${sinceTs}&until=${untilTs}`,
+      `/${igUserId}/insights?metric=reach&period=day&since=${sinceTs}&until=${untilTs}&metric_type=total_value`,
       token
     )
-    insights.reach = (r.data?.[0]?.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+    insights.reach = r.data?.[0]?.total_value?.value ?? (r.data?.[0]?.values||[]).reduce((a,v)=>a+(Number(v.value)||0),0)
     debugLog.push(`✓ Reach: ${insights.reach}`)
-  } catch(e) { debugLog.push(`✗ Reach: ${e.message}`) }
+  } catch(e) {
+    // Fallback without metric_type
+    try {
+      const r2 = await metaGET(`/${igUserId}/insights?metric=reach&period=day&since=${sinceTs}&until=${untilTs}`, token)
+      insights.reach = (r2.data?.[0]?.values||[]).reduce((a,v)=>a+(Number(v.value)||0),0)
+      debugLog.push(`✓ Reach (fallback): ${insights.reach}`)
+    } catch(e2) { debugLog.push(`✗ Reach: ${e2.message}`) }
+  }
 
   // Call C: profile_views + website_clicks — period=day + metric_type=total_value
   try {
