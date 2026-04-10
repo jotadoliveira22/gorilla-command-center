@@ -21,62 +21,57 @@ async function fetchAllData(token, igUserId) {
   )
   debugLog.push(`✓ Profile: @${profile.username}, ${profile.followers_count} seguidores`)
 
-  // 2. Account-level insights — period=days_28 gives the EXACT 28-day aggregate
-  //    that Instagram's app shows (not a sum of daily values)
-  const METRIC_MAP = { views: 'impressions', total_interactions: 'interactions' }
+  // 2. Account-level insights
+  // Strategy: use period=day + since/until (no metric_type) — this is what returns real data
+  // Each incompatible metric gets its own separate call
+  const METRIC_MAP = { views: 'impressions' }
   const insights = { impressions: 0, reach: 0, profile_views: 0, website_clicks: 0, follower_count: 0 }
+  const sinceTs = Math.floor((Date.now() - 28 * 86400000) / 1000)
+  const untilTs = Math.floor(Date.now() / 1000)
+
+  // Call A: views (impressions) — period=day, no metric_type
   try {
-    const res = await metaGET(
-      `/${igUserId}/insights?metric=reach,profile_views,website_clicks&period=days_28&metric_type=total_value`,
+    const r = await metaGET(
+      `/${igUserId}/insights?metric=views&period=day&since=${sinceTs}&until=${untilTs}`,
       token
     )
-    for (const item of (res.data || [])) {
-      const key = METRIC_MAP[item.name] || item.name
-      // metric_type=total_value returns total_value.value OR values[0].value
-      insights[key] = item.total_value?.value ?? item.values?.[0]?.value ?? 0
-    }
-    debugLog.push(`✓ Account insights (28d): reach=${insights.reach}, profile_views=${insights.profile_views}`)
-    // views needs period=day (incompatible with days_28)
-    try {
-      const sinceV = Math.floor((Date.now() - 28*86400000) / 1000)
-      const untilV = Math.floor(Date.now() / 1000)
-      const viewsRes = await metaGET(`/${igUserId}/insights?metric=views&period=day&since=${sinceV}&until=${untilV}&metric_type=total_value`, token)
-      const viewsData = viewsRes.data?.[0]
-      insights.impressions = viewsData?.total_value?.value ?? (viewsData?.values||[]).reduce((a,v)=>a+(Number(v.value)||0),0)
-      debugLog.push(`✓ Views (impressions) 28d: ${insights.impressions}`)
-    } catch(e) {
-      debugLog.push(`ℹ Views error: ${e.message} — using post fallback`)
-    }
-    // follower_count needs its own call without metric_type=total_value
-    try {
-      const fcRes = await metaGET(`/${igUserId}/insights?metric=follower_count&period=day&since=${Math.floor((Date.now()-28*86400000)/1000)}&until=${Math.floor(Date.now()/1000)}`, token)
-      const fcData = fcRes.data?.[0]?.values || []
-      insights.follower_count = fcData.reduce((a, v) => a + (Number(v.value) || 0), 0)
-      debugLog.push(`✓ Follower count change 28d: ${insights.follower_count}`)
-    } catch (e) {
-      debugLog.push(`ℹ Follower count: ${e.message}`)
-    }
-  } catch (e) {
-    debugLog.push(`✗ Account insights error: ${e.message}`)
-    // Fallback: try period=day with date range
-    try {
-      const since = Math.floor((Date.now() - 27 * 86400000) / 1000)
-      const until = Math.floor(Date.now() / 1000)
-      const res2 = await metaGET(
-        `/${igUserId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&metric_type=total_value`,
-        token
-      )
-      for (const item of (res2.data || [])) {
-        const k = METRIC_MAP[item.name] || item.name
-        insights[k] = item.total_value?.value ?? (item.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
-      }
-      debugLog.push(`✓ Fallback daily insights: impressions=${insights.impressions}, reach=${insights.reach}`)
-    } catch (e2) {
-      debugLog.push(`✗ Fallback insights error: ${e2.message}`)
-    }
-  }
+    insights.impressions = (r.data?.[0]?.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+    debugLog.push(`✓ Views: ${insights.impressions}`)
+  } catch(e) { debugLog.push(`✗ Views: ${e.message}`) }
 
-  // 3. Engagement metrics — aggregate from posts since Instagram app shows
+  // Call B: reach — period=day, no metric_type
+  try {
+    const r = await metaGET(
+      `/${igUserId}/insights?metric=reach&period=day&since=${sinceTs}&until=${untilTs}`,
+      token
+    )
+    insights.reach = (r.data?.[0]?.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+    debugLog.push(`✓ Reach: ${insights.reach}`)
+  } catch(e) { debugLog.push(`✗ Reach: ${e.message}`) }
+
+  // Call C: profile_views + website_clicks — period=day + metric_type=total_value
+  try {
+    const r = await metaGET(
+      `/${igUserId}/insights?metric=profile_views,website_clicks&period=day&since=${sinceTs}&until=${untilTs}&metric_type=total_value`,
+      token
+    )
+    for (const item of (r.data || [])) {
+      insights[item.name] = item.total_value?.value ?? (item.values||[]).reduce((a,v)=>a+(Number(v.value)||0),0)
+    }
+    debugLog.push(`✓ Profile views: ${insights.profile_views}, website clicks: ${insights.website_clicks}`)
+  } catch(e) { debugLog.push(`✗ Profile/Website: ${e.message}`) }
+
+  // Call D: follower_count — period=day, no metric_type (incompatible with total_value)
+  try {
+    const r = await metaGET(
+      `/${igUserId}/insights?metric=follower_count&period=day&since=${sinceTs}&until=${untilTs}`,
+      token
+    )
+    insights.follower_count = (r.data?.[0]?.values || []).reduce((a, v) => a + (Number(v.value) || 0), 0)
+    debugLog.push(`✓ Follower count change: ${insights.follower_count}`)
+  } catch(e) { debugLog.push(`✗ Follower count: ${e.message}`) }
+
+    // 3. Engagement metrics — aggregate from posts since Instagram app shows
   //    total likes, comments, saves, shares for the period
   const engagementTotals = { likes: 0, comments: 0, saved: 0, shares: 0, plays: 0 }
   let topMedia = []
