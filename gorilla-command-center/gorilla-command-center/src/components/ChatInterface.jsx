@@ -89,7 +89,8 @@ TEMA: ${content}`
     if (taRef.current) taRef.current.style.height = 'auto'
     setLoading(true)
     try {
-      const reply = await callClaude(apiMsgs, tab.prompt, apiKey)
+      const maxTok = isCarrusel ? 16000 : 4000
+      const reply = await callClaude(apiMsgs, tab.prompt, apiKey, maxTok)
       setMessages([...displayMsgs, { role: 'assistant', content: reply }])
     } catch (e) {
       setMessages([...displayMsgs, { role: 'assistant', content: `Error: ${e.message}` }])
