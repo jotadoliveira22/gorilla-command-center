@@ -1,233 +1,368 @@
-import { useState, useEffect } from 'react'
-import { discoverIGAccounts, fetchIGData, storage } from '../lib/api.js'
+import { useState, useEffect, useCallback } from 'react';
+import { discoverIGAccounts, storage } from '../lib/api.js';
 
-const MOCK = {
-  profile: { username: 'gorillagency', followers_count: 12840, media_count: 247, biography: 'Agencia de Marketing + IA 🦍' },
-  kpis: [
-    { label: 'Seguidores', value: '12.8K', delta: '+3.2%', icon: '👥' },
-    { label: 'Posts totales', value: '247', delta: '+18', icon: '📸' },
-    { label: 'Engagement est.', value: '4.8%', delta: '+0.6%', icon: '💬' },
-    { label: 'Alcance est. 7d', value: '48.2K', delta: '+12.1%', icon: '📡' },
-    { label: 'Impresiones est.', value: '94.5K', delta: '+8.7%', icon: '👁' },
-    { label: 'Visitas perfil', value: '3.2K', delta: '+15%', icon: '🔍' },
-  ],
-  topMedia: [
-    { id: 1, caption: 'El 90% de las marcas está tirando dinero con su marketing digital...', like_count: 1240, comments_count: 89, media_type: 'CAROUSEL_ALBUM' },
-    { id: 2, caption: '5 herramientas de IA que reemplazan equipos enteros de marketing...', like_count: 980, comments_count: 67, media_type: 'IMAGE' },
-    { id: 3, caption: 'Cómo automaticé mi agencia con IA en 30 días...', like_count: 874, comments_count: 112, media_type: 'VIDEO' },
-  ],
+// ─── Meta Graph API helpers ───────────────────────────────────────────────────
+const BASE = 'https://graph.instagram.com';
+
+async function igGet(path, token, params = {}) {
+    const url = new URL(`${BASE}${path}`);
+    url.searchParams.set('access_token', token);
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+    return res.json();
 }
 
-function Spinner({ size = 16 }) {
-  return <div style={{ width: size, height: size, border: '2px solid #222', borderTopColor: '#D63028', borderRadius: '50%', animation: 'spin .7s linear infinite', flexShrink: 0 }} />
+async function fetchProfile(token, igUserId) {
+    return igGet(`/${igUserId}`, token, {
+          fields: 'id,username,followers_count,follows_count,media_count,biography,profile_picture_url,website',
+    });
 }
 
-export default function Dashboard({ creds, setCreds }) {
-  const [step, setStep] = useState('token')
-  const [token, setToken] = useState('')
-  const [accounts, setAccounts] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [igData, setIgData] = useState(null)
+async function fetchInsights(token, igUserId) {
+    const since = Math.floor(Date.now() / 1000) - 28 * 86400;
+    const until = Math.floor(Date.now() / 1000);
+    return igGet(`/${igUserId}/insights`, token, {
+          metric: 'reach,impressions,profile_views,follower_count,website_clicks,email_contacts,phone_call_clicks',
+          period: 'day',
+          since,
+          until,
+    });
+}
 
-  useEffect(() => {
-    const saved = storage.get('ig_creds')
-    if (saved?.accessToken && saved?.igUserId) {
-      setToken(saved.accessToken)
-      setCreds(saved)
-      setStep('connected')
-      loadData(saved)
+async function fetchMedia(token, igUserId) {
+    const data = await igGet(`/${igUserId}/media`, token, {
+          fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+          limit: 9,
+    });
+    return data.data || [];
+}
+
+async function fetchMediaInsights(token, mediaId, mediaType) {
+    const isVideo = ['VIDEO', 'REEL'].includes(mediaType);
+    const metric = [
+          'impressions',
+          'reach',
+          'saved',
+          'shares',
+          isVideo ? 'plays' : null,
+        ]
+      .filter(Boolean)
+      .join(',');
+    try {
+          const data = await igGet(`/${mediaId}/insights`, token, { metric });
+          return Object.fromEntries((data.data || []).map((m) => [m.name, m.values?.[0]?.value ?? m.value ?? 0]));
+    } catch {
+          return {};
     }
-  }, [])
-
-  const loadData = async (c = creds) => {
-    setLoading(true)
-    try {
-      const d = await fetchIGData(c.accessToken, c.igUserId)
-      setIgData(d)
-    } catch (e) { setError(e.message) }
-    finally { setLoading(false) }
-  }
-
-  const [manualId, setManualId] = useState('')
-  const [showManual, setShowManual] = useState(false)
-
-  const discover = async () => {
-    if (!token.trim()) return
-    setLoading(true); setError('')
-    try {
-      const found = await discoverIGAccounts(token.trim())
-      if (!found.length) throw new Error('No se encontraron cuentas automáticamente. Usa la opción manual abajo.')
-      setAccounts(found); setStep('discover')
-    } catch (e) { setError(e.message); setShowManual(true) }
-    finally { setLoading(false) }
-  }
-
-  const connectManual = async () => {
-    if (!token.trim() || !manualId.trim()) return
-    setLoading(true); setError('')
-    const nc = { accessToken: token.trim(), igUserId: manualId.trim() }
-    try {
-      const d = await fetchIGData(nc.accessToken, nc.igUserId)
-      storage.set('ig_creds', nc)
-      setCreds(nc); setIgData(d); setStep('connected')
-    } catch (e) { setError(e.message) }
-    finally { setLoading(false) }
-  }
-
-  const select = async (acc) => {
-    setLoading(true); setError('')
-    const nc = { accessToken: token.trim(), igUserId: acc.id }
-    try {
-      const d = await fetchIGData(nc.accessToken, nc.igUserId)
-      storage.set('ig_creds', nc)
-      setCreds(nc); setIgData(d); setStep('connected')
-    } catch (e) { setError(e.message) }
-    finally { setLoading(false) }
-  }
-
-  const disconnect = () => {
-    storage.remove('ig_creds')
-    setCreds({ accessToken: '', igUserId: '' })
-    setStep('token'); setToken(''); setIgData(null); setAccounts([]); setError('')
-  }
-
-  const display = igData || MOCK
-  const kpis = igData
-    ? [
-        { label: 'Seguidores', value: display.profile.followers_count >= 1000 ? (display.profile.followers_count / 1000).toFixed(1) + 'K' : display.profile.followers_count, icon: '👥', delta: '' },
-        { label: 'Posts totales', value: display.profile.media_count, icon: '📸', delta: '' },
-      ]
-    : MOCK.kpis
-
-  return (
-    <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
-
-      {step === 'token' && (
-        <div style={{ maxWidth: 500, margin: '0 auto', paddingTop: 16 }}>
-          <div style={{ textAlign: 'center', marginBottom: 28 }}>
-            <div style={{ fontSize: 34, marginBottom: 10 }}>📊</div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 19, letterSpacing: 2, marginBottom: 8 }}>CONECTAR INSTAGRAM</div>
-            <div style={{ fontSize: 13, color: '#666', lineHeight: 1.7 }}>Pega tu Access Token y detectamos automáticamente tu cuenta Instagram Business.</div>
-          </div>
-
-          <div className="card" style={{ marginBottom: 14 }}>
-            <label>Access Token de Meta</label>
-            <input type="password" placeholder="EAAxxxx..." value={token} onChange={e => { setToken(e.target.value); setError('') }} onKeyDown={e => e.key === 'Enter' && discover()} />
-            <div style={{ fontSize: 11.5, color: '#555', marginTop: 8, lineHeight: 1.7 }}>
-              Obtén el token en <strong style={{ color: '#D63028' }}>developers.facebook.com/tools/explorer</strong><br />
-              Permisos necesarios: <code style={{ background: '#222', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>instagram_basic</code> <code style={{ background: '#222', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>pages_show_list</code> <code style={{ background: '#222', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>instagram_manage_insights</code> <code style={{ background: '#222', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>instagram_content_publish</code>
-            </div>
-          </div>
-
-          {error && <div style={{ background: '#1A0A0A', border: '1px solid #4A1A1A', borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: '#FF8080', marginBottom: 14, lineHeight: 1.6 }}>❌ {error}</div>}
-
-          <button className="btn-red" onClick={discover} disabled={loading || !token.trim()} style={{ width: '100%', padding: 13, justifyContent: 'center', marginBottom: 10 }}>
-            {loading ? <><Spinner size={14} />Buscando cuentas...</> : '🔍 Detectar mis cuentas automáticamente'}
-          </button>
-
-          <div style={{ textAlign: 'center', fontSize: 11.5, color: '#444', marginBottom: 10 }}>— o ingresa el ID manualmente —</div>
-
-          <div className="card" style={{ marginBottom: 0 }}>
-            <label>Instagram Business Account ID</label>
-            <input placeholder="17841408592252612" value={manualId} onChange={e => setManualId(e.target.value)} style={{ marginBottom: 10 }} />
-            <div style={{ fontSize: 11, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
-              Encuéntralo en Graph API Explorer escribiendo tu ID de Instagram en la barra de query. En tu caso ya lo tenemos: <strong style={{ color: '#D63028' }}>17841408592252612</strong>
-            </div>
-            <button className="btn-red" onClick={connectManual} disabled={loading || !token.trim() || !manualId.trim()} style={{ width: '100%', padding: 12, justifyContent: 'center' }}>
-              {loading ? <><Spinner size={14} />Conectando...</> : '🔗 Conectar con ID manual'}
-            </button>
-          </div>
-
-          <div className="card" style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 11.5, fontWeight: 600, color: '#555', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 14 }}>Cómo obtener el Access Token</div>
-            {[
-              ['1', 'Graph API Explorer', 'developers.facebook.com/tools/explorer'],
-              ['2', 'Selecciona tu App', 'Dropdown: "Gorilla Comand Center"'],
-              ['3', 'Agrega los permisos', 'instagram_basic + pages_show_list + instagram_manage_insights + instagram_content_publish'],
-              ['4', 'Generate Access Token', 'Clic en el botón azul → autoriza en el popup'],
-              ['5', 'Pega aquí', 'Copia el token largo y pégalo arriba'],
-            ].map(([n, t, d]) => (
-              <div key={n} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: '1px solid #222' }}>
-                <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#D63028', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{n}</div>
-                <div><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{t}</div><div style={{ fontSize: 11.5, color: '#555' }}>{d}</div></div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {step === 'discover' && (
-        <div style={{ maxWidth: 500, margin: '0 auto', paddingTop: 16 }}>
-          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 2, marginBottom: 6 }}>CUENTAS ENCONTRADAS</div>
-          <div style={{ fontSize: 13, color: '#666', marginBottom: 18 }}>Selecciona la cuenta que quieres conectar</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
-            {accounts.map(acc => (
-              <button key={acc.id} className="hrow" onClick={() => select(acc)} style={{ background: '#1A1A1A', border: '1px solid #222', borderRadius: 12, padding: '15px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left', width: '100%', transition: 'background .15s' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg,#D63028,#FF6B35)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0, overflow: 'hidden' }}>
-                  {acc.profile_picture_url ? <img src={acc.profile_picture_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : '🦍'}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>@{acc.username}</div>
-                  <div style={{ fontSize: 12, color: '#666' }}>{acc.followers_count?.toLocaleString()} seguidores · Página: {acc.pageName}</div>
-                </div>
-                <span style={{ color: '#D63028', fontSize: 13, fontWeight: 600 }}>Seleccionar →</span>
-              </button>
-            ))}
-          </div>
-          {error && <div style={{ background: '#1A0A0A', border: '1px solid #4A1A1A', borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: '#FF8080', marginBottom: 12, lineHeight: 1.6 }}>❌ {error}</div>}
-          {loading && <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#666', fontSize: 13 }}><Spinner />Conectando...</div>}
-          <button className="btn-ghost" onClick={() => { setStep('token'); setError('') }} style={{ marginTop: 8 }}>← Volver</button>
-        </div>
-      )}
-
-      {step === 'connected' && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
-            <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'linear-gradient(135deg,#D63028,#FF6B35)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0, overflow: 'hidden' }}>
-              {display.profile?.profile_picture_url ? <img src={display.profile.profile_picture_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : '🦍'}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1 }}>@{display.profile?.username}</div>
-              <div style={{ fontSize: 12, color: '#666' }}>{display.profile?.biography}</div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {igData ? <span className="badge" style={{ background: '#22C55E22', color: '#22C55E' }}>Conectado</span> : <span className="badge" style={{ background: '#C8A84022', color: '#C8A840' }}>Demo</span>}
-              <button className="btn-ghost" style={{ fontSize: 11, padding: '6px 12px' }} onClick={() => loadData()} disabled={loading}>{loading ? <Spinner size={12} /> : '↺'}</button>
-              <button className="btn-ghost" style={{ fontSize: 11, padding: '6px 12px' }} onClick={disconnect}>Desconectar</button>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 24 }}>
-            {kpis.slice(0, 6).map((k, i) => (
-              <div key={i} className="card" style={{ padding: '15px 17px' }}>
-                <div style={{ fontSize: 17, marginBottom: 7 }}>{k.icon}</div>
-                <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.5 }}>{k.value}</div>
-                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{k.label}</div>
-                {k.delta && <div style={{ fontSize: 10.5, color: '#22C55E', marginTop: 4, fontWeight: 600 }}>{k.delta}</div>}
-              </div>
-            ))}
-          </div>
-
-          {(display.topMedia || MOCK.topMedia).length > 0 && (
-            <>
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: '#555', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 }}>Top Posts</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {(display.topMedia || MOCK.topMedia).map((p, i) => (
-                  <div key={i} className="card" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 15px' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 7, background: '#333', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>#{i + 1}</div>
-                    {p.media_url && <img src={p.media_url} style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} onError={e => e.target.style.display = 'none'} />}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 3 }}>{p.caption || '(sin caption)'}</div>
-                      <div style={{ fontSize: 11, color: '#666' }}>❤ {(p.like_count || 0).toLocaleString()} · 💬 {p.comments_count || 0} · {p.media_type}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  )
 }
+
+function sumInsight(data, name) {
+    const item = (data?.data || []).find((d) => d.name === name);
+    if (!item) return 0;
+    return (item.values || []).reduce((acc, v) => acc + (v.value ?? 0), 0);
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+function StatCard({ label, value, icon }) {
+    return (
+          <div style={{
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 12,
+                  padding: '16px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+          }}>
+                  <span style={{ fontSize: 22 }}>{icon}</span>span>
+                  <span style={{ fontSize: 22, fontWeight: 700, color: '#fff' }}>{value ?? '—'}</span>span>
+                  <span style={{ fontSize: 12, color: '#aaa' }}>{label}</span>span>
+          </div>div>
+        );
+}
+
+function InsightCard({ label, value, icon }) {
+    return (
+          <div style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+          }}>
+                  <span style={{ fontSize: 20 }}>{icon}</span>span>
+                  <div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>{value ?? '—'}</div>div>
+                          <div style={{ fontSize: 11, color: '#999' }}>{label}</div>div>
+                  </div>div>
+          </div>div>
+        );
+}
+
+function PostCard({ post, insights }) {
+    const thumb = post.thumbnail_url || post.media_url;
+    const isVideo = ['VIDEO', 'REEL'].includes(post.media_type);
+    return (
+          <a
+                  href={post.permalink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                >
+                <div style={{
+                          background: 'rgba(255,255,255,0.04)',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          cursor: 'pointer',
+                          transition: 'transform .15s',
+                }}
+                          onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.02)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                        >
+                        <div style={{ position: 'relative', paddingTop: '100%', background: '#111' }}>
+                          {thumb ? (
+                                      <img
+                                                      src={thumb}
+                                                      alt="post"
+                                                      style={{
+                                                                        position: 'absolute', top: 0, left: 0,
+                                                                        width: '100%', height: '100%', objectFit: 'cover',
+                                                      }}
+                                                    />
+                                    ) : (
+                                      <div style={{
+                                                      position: 'absolute', top: 0, left: 0,
+                                                      width: '100%', height: '100%',
+                                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                      color: '#555', fontSize: 32,
+                                      }}>📷</div>div>
+                                  )}
+                          {isVideo && (
+                                      <span style={{
+                                                      position: 'absolute', top: 6, right: 6,
+                                                      background: 'rgba(0,0,0,.6)', borderRadius: 4,
+                                                      padding: '2px 5px', fontSize: 10, color: '#fff',
+                                      }}>▶ REEL</span>span>
+                                  )}
+                        </div>div>
+                        <div style={{ padding: '10px 12px', fontSize: 11, color: '#bbb', display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
+                                  <span>❤️ {post.like_count ?? 0}</span>span>
+                                  <span>💬 {post.comments_count ?? 0}</span>span>
+                                  <span>📡 {insights?.reach ?? 0}</span>span>
+                                  <span>👁️ {insights?.impressions ?? 0}</span>span>
+                                  <span>🔖 {insights?.saved ?? 0}</span>span>
+                                  <span>↗️ {insights?.shares ?? 0}</span>span>
+                          {isVideo && <span>▶️ {insights?.plays ?? 0}</span>span>}
+                        </div>div>
+                </div>div>
+          </a>a>
+        );
+}
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
+export default function Dashboard() {
+    const [accounts, setAccounts] = useState([]);
+    const [selected, setSelected] = useState(null);
+    const [profile, setProfile] = useState(null);
+    const [insights, setInsights] = useState(null);
+    const [media, setMedia] = useState([]);
+    const [mediaInsights, setMediaInsights] = useState({});
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+  
+    // Load connected accounts on mount
+    useEffect(() => {
+          const accs = discoverIGAccounts();
+          setAccounts(accs);
+          if (accs.length > 0) setSelected(accs[0]);
+    }, []);
+  
+    const loadData = useCallback(async (account) => {
+          if (!account) return;
+          setLoading(true);
+          setError(null);
+          setProfile(null);
+          setInsights(null);
+          setMedia([]);
+          setMediaInsights({});
+          try {
+                  const { token, igUserId } = account;
+                  const [prof, ins, posts] = await Promise.all([
+                            fetchProfile(token, igUserId),
+                            fetchInsights(token, igUserId),
+                            fetchMedia(token, igUserId),
+                          ]);
+                  setProfile(prof);
+                  setInsights(ins);
+                  setMedia(posts);
+                  // Fetch per-post insights in parallel
+                  const insightsMap = {};
+                  await Promise.all(
+                            posts.map(async (p) => {
+                                        insightsMap[p.id] = await fetchMediaInsights(token, p.id, p.media_type);
+                            })
+                          );
+                  setMediaInsights(insightsMap);
+          } catch (e) {
+                  setError(e.message || 'Error al cargar datos');
+          } finally {
+                  setLoading(false);
+          }
+    }, []);
+  
+    useEffect(() => {
+          if (selected) loadData(selected);
+    }, [selected, loadData]);
+  
+    // Compute engagement rate from last 5 posts
+    const engagementRate = (() => {
+          if (!media.length || !profile?.followers_count) return null;
+          const last5 = media.slice(0, 5);
+          const avgEngagement =
+                  last5.reduce((acc, p) => acc + (p.like_count || 0) + (p.comments_count || 0), 0) / last5.length;
+          return ((avgEngagement / profile.followers_count) * 100).toFixed(2) + '%';
+    })();
+  
+    const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n));
+  
+    // ── No accounts ─────────────────────────────────────────────────────────────
+    if (accounts.length === 0) {
+          return (
+                  <div style={{
+                            minHeight: '60vh', display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'center', gap: 16, color: '#aaa',
+                  }}>
+                          <span style={{ fontSize: 48 }}>📊</span>span>
+                          <h2 style={{ color: '#fff', margin: 0 }}>No hay cuentas conectadas</h2>h2>
+                          <p style={{ margin: 0 }}>Ve a <strong>Configuración</strong>strong> y conecta tu cuenta de Instagram.</p>p>
+                  </div>div>
+                );
+    }
+  
+    // ── Render ───────────────────────────────────────────────────────────────────
+    return (
+          <div style={{ padding: '24px 20px', maxWidth: 960, margin: '0 auto', fontFamily: 'sans-serif' }}>
+          
+            {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                        <h1 style={{ margin: 0, fontSize: 22, color: '#fff' }}>📊 Dashboard Instagram</h1>h1>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          {accounts.length > 1 && (
+                        <select
+                                        value={selected?.igUserId}
+                                        onChange={(e) => setSelected(accounts.find((a) => a.igUserId === e.target.value))}
+                                        style={{
+                                                          background: '#1a1a2e', color: '#fff', border: '1px solid #333',
+                                                          borderRadius: 8, padding: '6px 10px', fontSize: 13,
+                                        }}
+                                      >
+                          {accounts.map((a) => (
+                                                        <option key={a.igUserId} value={a.igUserId}>@{a.username || a.igUserId}</option>option>
+                                                      ))}
+                        </select>select>
+                                  )}
+                                  <button
+                                                onClick={() => loadData(selected)}
+                                                disabled={loading}
+                                                style={{
+                                                                background: loading ? '#333' : '#6c47ff',
+                                                                color: '#fff', border: 'none', borderRadius: 8,
+                                                                padding: '8px 16px', cursor: loading ? 'not-allowed' : 'pointer', fontSize: 13,
+                                                }}
+                                              >
+                                    {loading ? 'Cargando…' : '↺ Actualizar'}
+                                  </button>button>
+                        </div>div>
+                </div>div>
+          
+            {error && (
+                    <div style={{
+                                background: 'rgba(255,60,60,.1)', border: '1px solid rgba(255,60,60,.4)',
+                                borderRadius: 8, padding: 14, color: '#ff6b6b', marginBottom: 20, fontSize: 13,
+                    }}>
+                              ⚠️ {error}
+                    </div>div>
+                )}
+          
+            {/* ── Sección Cuenta ──────────────────────────────────────────────────── */}
+            {profile && (
+                    <section style={{ marginBottom: 32 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+                                {profile.profile_picture_url && (
+                                    <img
+                                                      src={profile.profile_picture_url}
+                                                      alt="avatar"
+                                                      style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover' }}
+                                                    />
+                                  )}
+                                          <div>
+                                                        <div style={{ fontWeight: 700, color: '#fff', fontSize: 16 }}>@{profile.username}</div>div>
+                                            {profile.biography && (
+                                      <div style={{ color: '#aaa', fontSize: 12, marginTop: 2, maxWidth: 400 }}>{profile.biography}</div>div>
+                                                        )}
+                                          </div>div>
+                              </div>div>
+                              <h2 style={{ color: '#ccc', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, margin: '0 0 12px' }}>
+                                          Cuenta
+                              </h2>h2>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+                                          <StatCard label="Seguidores" value={fmt(profile.followers_count)} icon="👥" />
+                                          <StatCard label="Siguiendo" value={fmt(profile.follows_count)} icon="➕" />
+                                          <StatCard label="Publicaciones" value={fmt(profile.media_count)} icon="🗂️" />
+                                          <StatCard label="Engagement Rate" value={engagementRate} icon="📈" />
+                              </div>div>
+                    </section>section>
+                )}
+          
+            {/* ── Sección Insights 28 días ────────────────────────────────────────── */}
+            {insights && (
+                    <section style={{ marginBottom: 32 }}>
+                              <h2 style={{ color: '#ccc', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, margin: '0 0 12px' }}>
+                                          Insights últimos 28 días
+                              </h2>h2>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+                                          <InsightCard label="Alcance total" value={fmt(sumInsight(insights, 'reach'))} icon="📡" />
+                                          <InsightCard label="Impresiones" value={fmt(sumInsight(insights, 'impressions'))} icon="👁️" />
+                                          <InsightCard label="Visitas al perfil" value={fmt(sumInsight(insights, 'profile_views'))} icon="🔍" />
+                                          <InsightCard label="Seguidores nuevos" value={fmt(sumInsight(insights, 'follower_count'))} icon="🆕" />
+                                          <InsightCard label="Clicks web" value={fmt(sumInsight(insights, 'website_clicks'))} icon="🌐" />
+                                          <InsightCard label="Contactos email" value={fmt(sumInsight(insights, 'email_contacts'))} icon="📧" />
+                                          <InsightCard label="Clicks teléfono" value={fmt(sumInsight(insights, 'phone_call_clicks'))} icon="📞" />
+                              </div>div>
+                    </section>section>
+                )}
+          
+            {/* ── Sección Últimas publicaciones ──────────────────────────────────── */}
+            {media.length > 0 && (
+                    <section>
+                              <h2 style={{ color: '#ccc', fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, margin: '0 0 12px' }}>
+                                          Últimas publicaciones
+                              </h2>h2>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                                {media.map((post) => (
+                                    <PostCard key={post.id} post={post} insights={mediaInsights[post.id]} />
+                                  ))}
+                              </div>div>
+                    </section>section>
+                )}
+          
+            {/* Loading skeleton */}
+            {loading && !profile && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginTop: 20 }}>
+                      {Array.from({ length: 8 }).map((_, i) => (
+                                  <div key={i} style={{
+                                                  background: 'rgba(255,255,255,0.03)',
+                                                  border: '1px solid rgba(255,255,255,0.06)',
+                                                  borderRadius: 10, height: 90,
+                                                  animation: 'pulse 1.5s ease-in-out infinite',
+                                  }} />
+                                ))}
+                    </div>div>
+                )}
+          </div>div>
+        );
+}</div>
