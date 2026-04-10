@@ -27,7 +27,7 @@ async function fetchAllData(token, igUserId) {
   const insights = { impressions: 0, reach: 0, profile_views: 0, website_clicks: 0, follower_count: 0 }
   try {
     const res = await metaGET(
-      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks,follower_count&period=days_28&metric_type=total_value`,
+      `/${igUserId}/insights?metric=views,reach,profile_views,website_clicks&period=days_28&metric_type=total_value`,
       token
     )
     for (const item of (res.data || [])) {
@@ -36,6 +36,15 @@ async function fetchAllData(token, igUserId) {
       insights[key] = item.total_value?.value ?? item.values?.[0]?.value ?? 0
     }
     debugLog.push(`✓ Account insights (28d): impressions=${insights.impressions}, reach=${insights.reach}, profile_views=${insights.profile_views}`)
+    // follower_count needs its own call without metric_type=total_value
+    try {
+      const fcRes = await metaGET(`/${igUserId}/insights?metric=follower_count&period=day&since=${Math.floor((Date.now()-28*86400000)/1000)}&until=${Math.floor(Date.now()/1000)}`, token)
+      const fcData = fcRes.data?.[0]?.values || []
+      insights.follower_count = fcData.reduce((a, v) => a + (Number(v.value) || 0), 0)
+      debugLog.push(`✓ Follower count change 28d: ${insights.follower_count}`)
+    } catch (e) {
+      debugLog.push(`ℹ Follower count: ${e.message}`)
+    }
   } catch (e) {
     debugLog.push(`✗ Account insights error: ${e.message}`)
     // Fallback: try period=day with date range
