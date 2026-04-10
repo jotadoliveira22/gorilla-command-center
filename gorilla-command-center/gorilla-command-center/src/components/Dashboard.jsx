@@ -93,18 +93,13 @@ async function fetchAllData(token, igUserId) {
 
     // Fetch insights per post
     const since28 = new Date(Date.now() - 28 * 86400000)
-    topMedia = await Promise.all(mediaList.slice(0, 9).map(async (post) => {
+    topMedia = await Promise.all(mediaList.slice(0, 20).map(async (post) => {
       let pi = {}
       try {
-        // Different metric sets per media type
-        let metrics
-        if (post.media_type === 'VIDEO') {
-          metrics = 'impressions,reach,plays,saved,shares'
-        } else if (post.media_type === 'CAROUSEL_ALBUM') {
-          metrics = 'carousel_album_impressions,carousel_album_reach,carousel_album_saved,carousel_album_shares'
-        } else {
-          metrics = 'impressions,reach,saved,shares'
-        }
+        // Use unified metrics for all post types (new API doesn't need carousel_album_ prefix)
+        let metrics = post.media_type === 'VIDEO'
+          ? 'reach,plays,saved,shares'
+          : 'reach,saved,shares'
         // Try without metric_type=total_value first (works for saved, shares)
         // If it fails, try with it (needed for impressions on some post types)
         let insData = []
@@ -229,7 +224,7 @@ async function fetchAllData(token, igUserId) {
   let reachSplit = { followers: 44.7, nonFollowers: 55.3 } // default from Instagram data
   try {
     const rsRes = await metaGET(
-      `/${igUserId}/insights?metric=reached_audience_demographics&period=day&since=${sinceTs}&until=${untilTs}&breakdown=follow_type&metric_type=total_value`,
+      `/${igUserId}/insights?metric=reached_audience_demographics&period=lifetime&breakdown=follow_type&metric_type=total_value`,
       token
     )
     const rsItem = rsRes.data?.[0]
@@ -258,7 +253,7 @@ async function fetchAllData(token, igUserId) {
   let interactionSplit = { followers: 90.3, nonFollowers: 9.7 }
   try {
     const isRes = await metaGET(
-      `/${igUserId}/insights?metric=engaged_audience_demographics&period=day&since=${sinceTs}&until=${untilTs}&breakdown=follow_type&metric_type=total_value`,
+      `/${igUserId}/insights?metric=engaged_audience_demographics&period=lifetime&breakdown=follow_type&metric_type=total_value`,
       token
     )
     const isItem = isRes.data?.[0]
